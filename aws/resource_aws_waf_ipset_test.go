@@ -2,8 +2,10 @@ package aws
 
 import (
 	"fmt"
+	"net"
 	"reflect"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/hashicorp/terraform/helper/resource"
@@ -163,6 +165,46 @@ func TestAccAWSWafIPSet_noDescriptors(t *testing.T) {
 						"aws_waf_ipset.ipset", "name", ipsetName),
 					resource.TestCheckResourceAttr(
 						"aws_waf_ipset.ipset", "ip_set_descriptors.#", "0"),
+				),
+			},
+		},
+	})
+}
+
+func TestAccAWSWafIPSet_IpSetDescriptors_1000UpdateLimit(t *testing.T) {
+	var ipset waf.IPSet
+	ipsetName := fmt.Sprintf("ip-set-%s", acctest.RandString(5))
+	resourceName := "aws_waf_ipset.ipset"
+
+	incrementIP := func(ip net.IP) {
+		for j := len(ip) - 1; j >= 0; j-- {
+			ip[j]++
+			if ip[j] > 0 {
+				break
+			}
+		}
+	}
+
+	// Generate 2048 IPs
+	ip, ipnet, err := net.ParseCIDR("10.0.0.0/21")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ipSetDescriptors := make([]string, 0, 2048)
+	for ip := ip.Mask(ipnet.Mask); ipnet.Contains(ip); incrementIP(ip) {
+		ipSetDescriptors = append(ipSetDescriptors, fmt.Sprintf("ip_set_descriptors {\ntype=\"IPV4\"\nvalue=\"%s/32\"\n}", ip))
+	}
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:     func() { testAccPreCheck(t) },
+		Providers:    testAccProviders,
+		CheckDestroy: testAccCheckAWSWafIPSetDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccAWSWafIPSetConfig_IpSetDescriptors(ipsetName, strings.Join(ipSetDescriptors, "\n")),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					testAccCheckAWSWafIPSetExists(resourceName, &ipset),
+					resource.TestCheckResourceAttr(resourceName, "ip_set_descriptors.#", "2048"),
 				),
 			},
 		},
@@ -399,6 +441,13 @@ func testAccAWSWafIPSetConfigChangeIPSetDescriptors(name string) string {
     value = "192.0.8.0/24"
   }
 }`, name)
+}
+
+func testAccAWSWafIPSetConfig_IpSetDescriptors(name, ipSetDescriptors string) string {
+	return fmt.Sprintf(`resource "aws_waf_ipset" "ipset" {
+  name = "%s"
+%s
+}`, name, ipSetDescriptors)
 }
 
 func testAccAWSWafIPSetConfig_noDescriptors(name string) string {

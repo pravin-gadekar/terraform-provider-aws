@@ -2,8 +2,10 @@ package aws
 
 import (
 	"fmt"
+	"net"
 	"reflect"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/hashicorp/terraform/helper/resource"
@@ -136,6 +138,46 @@ func TestAccAWSWafRegionalIPSet_changeDescriptors(t *testing.T) {
 						"aws_wafregional_ipset.ipset", "ip_set_descriptor.115741513.type", "IPV4"),
 					resource.TestCheckResourceAttr(
 						"aws_wafregional_ipset.ipset", "ip_set_descriptor.115741513.value", "192.0.8.0/24"),
+				),
+			},
+		},
+	})
+}
+
+func TestAccAWSWafRegionalIPSet_IpSetDescriptors_1000UpdateLimit(t *testing.T) {
+	var ipset waf.IPSet
+	ipsetName := fmt.Sprintf("ip-set-%s", acctest.RandString(5))
+	resourceName := "aws_wafregional_ipset.ipset"
+
+	incrementIP := func(ip net.IP) {
+		for j := len(ip) - 1; j >= 0; j-- {
+			ip[j]++
+			if ip[j] > 0 {
+				break
+			}
+		}
+	}
+
+	// Generate 2048 IPs
+	ip, ipnet, err := net.ParseCIDR("10.0.0.0/21")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ipSetDescriptors := make([]string, 0, 2048)
+	for ip := ip.Mask(ipnet.Mask); ipnet.Contains(ip); incrementIP(ip) {
+		ipSetDescriptors = append(ipSetDescriptors, fmt.Sprintf("ip_set_descriptor {\ntype=\"IPV4\"\nvalue=\"%s/32\"\n}", ip))
+	}
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:     func() { testAccPreCheck(t) },
+		Providers:    testAccProviders,
+		CheckDestroy: testAccCheckAWSWafRegionalIPSetDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccAWSWafRegionalIPSetConfig_IpSetDescriptors(ipsetName, strings.Join(ipSetDescriptors, "\n")),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					testAccCheckAWSWafRegionalIPSetExists(resourceName, &ipset),
+					resource.TestCheckResourceAttr(resourceName, "ip_set_descriptor.#", "2048"),
 				),
 			},
 		},
@@ -396,6 +438,13 @@ func testAccAWSWafRegionalIPSetConfigChangeIPSetDescriptors(name string) string 
     value = "192.0.8.0/24"
   }
 }`, name)
+}
+
+func testAccAWSWafRegionalIPSetConfig_IpSetDescriptors(name, ipSetDescriptors string) string {
+	return fmt.Sprintf(`resource "aws_wafregional_ipset" "ipset" {
+  name = "%s"
+%s
+}`, name, ipSetDescriptors)
 }
 
 func testAccAWSWafRegionalIPSetConfig_noDescriptors(name string) string {
